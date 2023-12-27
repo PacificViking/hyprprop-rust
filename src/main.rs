@@ -3,13 +3,14 @@ use clap::Parser;
 use hyprland::data::*;
 use hyprland::prelude::*;
 use hyprland::shared::*;
-use hyprland::event_listener::EventListener;
+use hyprland::event_listener::AsyncEventListener;
 
 use itertools::Itertools;
 
-use std::process::{Command, Stdio};
-use std::io::Write;
-
+use tokio::{io::AsyncWriteExt, process::Command};
+use std::process::Stdio;
+use std::sync::{Arc, Mutex};
+use futures::executor::block_on;
 
 /// xprop for Hyprland
 #[derive(Parser, Debug)]
@@ -20,7 +21,6 @@ struct Args {
 trait ToSlurpArea {
     fn to_slurp_area(&self) -> String;
 }
-
 impl ToSlurpArea for Client {
     fn to_slurp_area(&self) -> String {
         return format!("{ax},{ay} {bx}x{by}",
@@ -31,7 +31,13 @@ impl ToSlurpArea for Client {
     }
 }
 
-fn ask_slurp_prop() -> Client {
+fn get_workspace_clients() -> Vec<hyprland::data::Client>{
+    let workspace_id = Client::get_active().unwrap().unwrap().workspace.id;
+
+    Clients::get().unwrap().filter(|x| x.workspace.id == workspace_id).collect()
+}
+
+async fn ask_slurp_area(workspace_clients: &Vec<hyprland::data::Client>) -> String {
     let slurp_location: &str;
     match option_env!("SLURP_LOCATION") {
         Some(x) => {slurp_location = x},
@@ -39,13 +45,6 @@ fn ask_slurp_prop() -> Client {
     }
 
     //let args = Args::parse();
-    let workspace_id = Client::get_active().unwrap().unwrap().workspace.id;
-
-    let workspace_clients: &Vec<Client> = &(Clients::get()
-                                            .unwrap()
-                                            .filter(|x| x.workspace.id == workspace_id)
-                                            .collect()
-                                            );
 
     let client_sizes_slurp: String = workspace_clients
         .into_iter()
@@ -61,12 +60,19 @@ fn ask_slurp_prop() -> Client {
 
     let mut stdin = slurpcommand.stdin.take().expect("Failed to create stdin");
     stdin.write_all(client_sizes_slurp.as_bytes())
+        .await
         .expect("Failed to write to stdin");
     drop(stdin);
 
-    let output = slurpcommand.wait_with_output().expect("Wait failed?");
-    let selected_slurp_area = String::from_utf8_lossy(&output.stdout).to_string();
-    let selected_slurp_area = selected_slurp_area.trim();
+    let output = slurpcommand
+        .wait_with_output()
+        .await
+        .expect("Wait failed?");
+
+    return String::from_utf8_lossy(&output.stdout).to_string().trim().to_string();
+}
+
+fn get_prop(workspace_clients: &Vec<Client>, selected_slurp_area: String) -> Client {
 
     let prop = workspace_clients
         .into_iter()
@@ -78,18 +84,42 @@ fn ask_slurp_prop() -> Client {
     return prop;
 }
 
-fn reload_areas() {
-    // reloads areas and workspace_clients
+fn reload_areas(reload: Arc<Mutex<bool>>) {
+    let mut rel = reload.lock().unwrap();
+    *rel = true;
 }
 
-fn main() {
-    let mut listener = EventListener::new();
-    listener.add_workspace_change_handler(|_| reload_areas());
-    listener.add_active_monitor_change_handler(|_| reload_areas());
-    listener.add_window_open_handler(|_| reload_areas());
-    listener.add_window_close_handler(|_| reload_areas());
-    listener.add_window_moved_handler(|_| reload_areas());
+#[tokio::main]
+async fn main() {
+    let should_reload = Arc::new(Mutex::new(false));
 
-    let prop = ask_slurp_prop();
-    println!("{:#?}", prop);
+    let workspace_clients = get_workspace_clients();
+    let area_future = ask_slurp_area(&workspace_clients);
+
+    let mut listener = AsyncEventListener::new();
+
+    let relclone = Arc::clone(&should_reload);
+
+    listener.add_workspace_change_handler( move |_| {
+        println!("asdf");
+        let relclone = Arc::clone(&relclone);
+        Box::pin(async move {
+            reload_areas(relclone)
+        })
+    });
+
+    let listener_future = listener.start_listener_async();
+
+    //listener.add_workspace_change_handler(a);
+    //listener.add_active_monitor_change_handler( async_closure! { |_| reload_areas(reload) });
+    //listener.add_window_open_handler( async_closure! { |_| reload_areas(reload) });
+    //listener.add_window_close_handler( async_closure! { |_| reload_areas(reload) });
+    //listener.add_window_moved_handler( async_closure! { |_| reload_areas(reload) });
+    //
+    
+    #[allow(unused_variables)]
+    let prop = get_prop(&workspace_clients, block_on(area));
+    //println!("{:#?}", prop);
+
+    println!("{:#?}", should_reload.clone().lock().unwrap());
 }

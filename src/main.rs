@@ -3,14 +3,13 @@ use clap::Parser;
 use hyprland::data::*;
 use hyprland::prelude::*;
 use hyprland::shared::*;
-use hyprland::event_listener::AsyncEventListener;
+use hyprland::event_listener::EventListener;
 
 use itertools::Itertools;
 
 use tokio::{io::AsyncWriteExt, process::Command};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use futures::executor::block_on;
 
 /// xprop for Hyprland
 #[derive(Parser, Debug)]
@@ -32,6 +31,7 @@ impl ToSlurpArea for Client {
 }
 
 fn get_workspace_clients() -> Vec<hyprland::data::Client>{
+    // workspace may be empty, making this unwrap fail
     let workspace_id = Client::get_active().unwrap().unwrap().workspace.id;
 
     Clients::get().unwrap().filter(|x| x.workspace.id == workspace_id).collect()
@@ -55,6 +55,7 @@ async fn ask_slurp_area(workspace_clients: &Vec<hyprland::data::Client>) -> Stri
         .arg("-r")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .unwrap_or_else(|_| panic!("failed to execute process `{slurp_location}`"));
 
@@ -84,7 +85,7 @@ fn get_prop(workspace_clients: &Vec<Client>, selected_slurp_area: String) -> Cli
     return prop;
 }
 
-fn reload_areas(reload: Arc<Mutex<bool>>) {
+fn reload_areas(reload: &Arc<Mutex<bool>>) {
     let mut rel = reload.lock().unwrap();
     *rel = true;
 }
@@ -93,33 +94,56 @@ fn reload_areas(reload: Arc<Mutex<bool>>) {
 async fn main() {
     let should_reload = Arc::new(Mutex::new(false));
 
-    let workspace_clients = get_workspace_clients();
-    let area_future = ask_slurp_area(&workspace_clients);
+    let mut listener = EventListener::new();
 
-    let mut listener = AsyncEventListener::new();
+    let reload = should_reload.clone();
+    listener.add_workspace_change_handler( move |_| { reload_areas(&reload)} );
+    let reload = should_reload.clone();
+    listener.add_active_monitor_change_handler( move |_| reload_areas(&reload) );
+    let reload = should_reload.clone();
+    listener.add_window_open_handler( move |_| reload_areas(&reload) );
+    let reload = should_reload.clone();
+    listener.add_window_close_handler( move |_| reload_areas(&reload) );
+    let reload = should_reload.clone();
+    listener.add_window_moved_handler( move |_| reload_areas(&reload) );
 
-    let relclone = Arc::clone(&should_reload);
+    let listener_future = tokio::spawn(async move {listener.start_listener_async().await.unwrap();});  // this starts listening asynchronously
 
-    listener.add_workspace_change_handler( move |_| {
-        println!("asdf");
-        let relclone = Arc::clone(&relclone);
-        Box::pin(async move {
-            reload_areas(relclone)
-        })
-    });
 
-    let listener_future = listener.start_listener_async();
+    let mut workspace_clients = get_workspace_clients();
+    let cloned_workspace_clients = workspace_clients.clone();
+    let mut area_future = ask_slurp_area(&cloned_workspace_clients);
 
-    //listener.add_workspace_change_handler(a);
-    //listener.add_active_monitor_change_handler( async_closure! { |_| reload_areas(reload) });
-    //listener.add_window_open_handler( async_closure! { |_| reload_areas(reload) });
-    //listener.add_window_close_handler( async_closure! { |_| reload_areas(reload) });
-    //listener.add_window_moved_handler( async_closure! { |_| reload_areas(reload) });
-    //
-    
-    #[allow(unused_variables)]
-    let prop = get_prop(&workspace_clients, block_on(area));
-    //println!("{:#?}", prop);
+    loop {
+        //println!("newloop");
+        tokio::select! {
+            area_str = area_future => {
+                let prop = get_prop(&workspace_clients, area_str);
+                println!("{:#?}", prop);
+                break;
+            }
 
-    println!("{:#?}", should_reload.clone().lock().unwrap());
+            _ = async {
+                // this is fast and dirty. we should use non-loop-checking tools instead
+                loop {
+                    let mut rel = should_reload.lock().unwrap();
+                    if *rel {
+                        // if should_reload, lock and return this future to reload workspaces
+                        *rel = false;
+                        break;
+                    }
+                    drop(rel);  // this is stupid.. but only this way we unlock reload
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                }
+                return;
+            } => {
+                workspace_clients = get_workspace_clients();
+                area_future = ask_slurp_area(&workspace_clients);
+            }
+
+        }
+    }
+    //println!("{:#?}",should_reload.clone().lock().unwrap());
+
+    listener_future.abort();  // this is useless
 }

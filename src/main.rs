@@ -85,7 +85,7 @@ fn get_prop(workspace_clients: &Vec<Client>, selected_slurp_area: String) -> Cli
         .into_iter()
         .filter(|x| x.to_slurp_area() == selected_slurp_area)
         .nth(0)
-        .expect("unable to read window")
+        .expect("Cannot find client with selected area (selection may be cancelled)")
         .to_owned();
 
     return prop;

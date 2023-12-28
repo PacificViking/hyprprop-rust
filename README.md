@@ -6,14 +6,16 @@ xprop for Hyprland, a Rust port from https://github.com/vilari-mickopf/hyprprop
 - Slurp location can be changed with the SLURP_LOCATION environment variable, which is the whole point of the rewrite in the first place (to allow installing in NixOS)
 
 ## Install
+
+#### Through bash:
 ```bash
 export SLURP_LOCATION=/usr/bin/slurp
 cargo install --path .
 ```
 Installed binary is at ~/.cargo/bin
 
-
-Alternatively, with Flakes: (currently only supported system is x86_64-linux)
+--------------------------------
+#### Alternatively, with Flakes: (currently only supported system is x86_64-linux)
 
 flake.nix:
 ```nix

@@ -50,7 +50,7 @@ async fn ask_slurp_area(workspace_clients: &Vec<hyprland::data::Client>) -> Stri
         None => {slurp_location = "slurp"}
     }
 
-    //let args = Args::parse();
+    Args::parse();
 
     let client_sizes_slurp: String = workspace_clients
         .into_iter()

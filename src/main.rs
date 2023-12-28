@@ -32,9 +32,15 @@ impl ToSlurpArea for Client {
 
 fn get_workspace_clients() -> Vec<hyprland::data::Client>{
     // workspace may be empty, making this unwrap fail
-    let workspace_id = Client::get_active().unwrap().unwrap().workspace.id;
+    let workspace_id = Client::get_active()
+        .expect("Cannot get active client")  // get active expect
+        .expect("No windows in active workspace")
+        .workspace.id;
 
-    Clients::get().unwrap().filter(|x| x.workspace.id == workspace_id).collect()
+    return Clients::get()
+        .expect("Cannot get clients")
+        .filter(|x| x.workspace.id == workspace_id)
+        .collect();
 }
 
 async fn ask_slurp_area(workspace_clients: &Vec<hyprland::data::Client>) -> String {
@@ -86,7 +92,7 @@ fn get_prop(workspace_clients: &Vec<Client>, selected_slurp_area: String) -> Cli
 }
 
 fn reload_areas(reload: &Arc<Mutex<bool>>) {
-    let mut rel = reload.lock().unwrap();
+    let mut rel = reload.lock().expect("Cannot unlock");
     *rel = true;
 }
 
@@ -107,7 +113,14 @@ async fn main() {
     let reload = should_reload.clone();
     listener.add_window_moved_handler( move |_| reload_areas(&reload) );
 
-    let listener_future = tokio::spawn(async move {listener.start_listener_async().await.unwrap();});  // this starts listening asynchronously
+    let listener_future = tokio::spawn(
+            async move {
+                listener
+                    .start_listener_async()
+                    .await
+                    .expect("Cannot spawn listener");
+            }
+        );  // this starts listening asynchronously
 
 
     let mut workspace_clients = get_workspace_clients();
@@ -126,7 +139,9 @@ async fn main() {
             _ = async {
                 // this is fast and dirty. we should use non-loop-checking tools instead
                 loop {
-                    let mut rel = should_reload.lock().unwrap();
+                    let mut rel = should_reload
+                        .lock()
+                        .expect("Cannot unlock should_reload");
                     if *rel {
                         // if should_reload, lock and return this future to reload workspaces
                         *rel = false;
